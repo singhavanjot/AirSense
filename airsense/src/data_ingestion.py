@@ -36,6 +36,20 @@ from config import (
 logger = logging.getLogger(__name__)
 
 
+def _safe_error_message(error: Exception) -> str:
+    """Return an exception message with common API credential query values hidden."""
+    message = str(error)
+    for parameter in ("appid", "api-key", "X-API-Key", "apikey", "key"):
+        marker = f"{parameter}="
+        while marker in message:
+            start = message.index(marker) + len(marker)
+            end = message.find("&", start)
+            if end == -1:
+                end = len(message)
+            message = f"{message[:start]}[redacted]{message[end:]}"
+    return message
+
+
 def _slugify(value: str) -> str:
     return "".join(char.lower() if char.isalnum() else "_" for char in value).strip("_")
 
@@ -72,12 +86,17 @@ def _retry_call(factory: Callable[[], pd.DataFrame], attempts: int = 3, base_del
             return pd.DataFrame(result)
         except Exception as exc:  # pragma: no cover - defensive logging
             last_error = exc
+            response = getattr(exc, "response", None)
+            status_code = getattr(response, "status_code", None)
+            if status_code in {401, 403}:
+                logger.error("API authentication failed with HTTP %s", status_code)
+                return pd.DataFrame()
             wait_time = base_delay * (2**attempt)
-            logger.warning("Attempt %s failed: %s", attempt + 1, exc)
+            logger.warning("Attempt %s failed: %s", attempt + 1, _safe_error_message(exc))
             if attempt < attempts - 1:
                 time.sleep(wait_time)
     if last_error is not None:
-        logger.error("All retries failed: %s", last_error)
+        logger.error("All retries failed: %s", _safe_error_message(last_error))
     return pd.DataFrame()
 
 
@@ -280,6 +299,7 @@ def _fetch_openweather_weather(city: str, start_date: pd.Timestamp, end_date: pd
     end_day = end_date.ceil("D")
     days = pd.date_range(start_day, end_day, freq="D", tz="UTC")
     rows: list[pd.DataFrame] = []
+    authorization_failed = False
 
     for day in days:
         params = {
@@ -291,7 +311,11 @@ def _fetch_openweather_weather(city: str, start_date: pd.Timestamp, end_date: pd
         }
 
         def _request_day() -> pd.DataFrame:
+            nonlocal authorization_failed
             response = requests.get(api_url, params=params, timeout=20)
+            if response.status_code in {401, 403}:
+                authorization_failed = True
+                return pd.DataFrame()
             response.raise_for_status()
             payload = response.json()
             records = payload.get("data") or payload.get("hourly") or []
@@ -321,6 +345,9 @@ def _fetch_openweather_weather(city: str, start_date: pd.Timestamp, end_date: pd
             return output.dropna(subset=["timestamp"])
 
         day_frame = _retry_call(_request_day)
+        if authorization_failed:
+            logger.error("OpenWeather authentication failed; using synthetic weather fallback.")
+            break
         if not day_frame.empty:
             rows.append(day_frame)
 
