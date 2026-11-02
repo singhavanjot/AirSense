@@ -1,0 +1,10 @@
+.env
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.streamlit/
+data/raw/
+data/processed/models/
+*.sqlite3
+.DS_Store
