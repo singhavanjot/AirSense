@@ -2,6 +2,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
+import sys
+
+APP_DIR = Path(__file__).resolve().parent
+if str(APP_DIR) not in sys.path:
+    sys.path.insert(0, str(APP_DIR))
 
 import numpy as np
 import pandas as pd
@@ -18,7 +24,7 @@ from src.forecasting import load_or_train_model, predict_next_hours
 from src.health_advisory import aqi_to_category, get_category_color, get_recommended_action
 from src.report_export import generate_summary_report
 
-load_dotenv()
+load_dotenv(APP_DIR / ".env")
 
 st.set_page_config(page_title="AirSense", page_icon="🌫️", layout="wide")
 
