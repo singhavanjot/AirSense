@@ -97,6 +97,17 @@ def _latest_record(frame: pd.DataFrame) -> pd.Series:
     return frame.sort_values("timestamp").iloc[-1]
 
 
+def _source_summary(frame: pd.DataFrame) -> str:
+    """Describe the AQI and weather sources represented in a merged dataset."""
+    source_columns = [column for column in ["source_aqi", "source_weather", "source"] if column in frame.columns]
+    sources: list[str] = []
+    for column in source_columns:
+        for value in frame[column].dropna().astype(str).unique():
+            if value not in sources:
+                sources.append(value)
+    return ", ".join(sources) if sources else "unknown"
+
+
 def _render_card(title: str, value: str, subtitle: str, color: str) -> None:
     """Render a styled metric card in the dashboard."""
     st.markdown(
@@ -270,6 +281,11 @@ latest_action = get_recommended_action(latest_category)
 last_updated = pd.to_datetime(primary_frame["timestamp"].max(), utc=True).strftime("%Y-%m-%d %H:%M UTC")
 
 st.sidebar.markdown(f"**Batch refresh:** data is refreshed periodically, not live.\n\n**Last updated:** {last_updated}")
+st.sidebar.markdown("**Data sources**")
+for city, frame in city_frames.items():
+    source_summary = _source_summary(frame)
+    source_label = "Live" if "synthetic" not in source_summary else "Synthetic fallback"
+    st.sidebar.caption(f"{city}: {source_label} ({source_summary})")
 
 st.subheader("Current AQI and advisories")
 card_columns = st.columns(len(selected_cities))

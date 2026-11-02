@@ -82,7 +82,7 @@ OPENWEATHER_API_URL_ENV = "OPENWEATHER_API_URL"
 OPENWEATHER_API_KEY_ENV = "OPENWEATHER_API_KEY"
 
 DEFAULT_CPCB_API_URL = "https://api.data.gov.in/resource/placeholder-cpcb-aqi"
-DEFAULT_OPENAQ_API_URL = "https://api.openaq.org/v2/measurements"
+DEFAULT_OPENAQ_API_URL = "https://api.openaq.org/v3/measurements"
 DEFAULT_OPENWEATHER_API_URL = "https://api.openweathermap.org/data/3.0/onecall/timemachine"
 
 SOURCE_NAME_CPCB = "cpcb"

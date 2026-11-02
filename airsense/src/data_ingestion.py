@@ -203,16 +203,39 @@ def _fetch_openaq_aqi(city: str, start_date: pd.Timestamp, end_date: pd.Timestam
     if api_key:
         headers["X-API-Key"] = api_key
 
-    params = {
-        "city": city,
-        "parameter": "pm25",
-        "date_from": start_date.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "date_to": end_date.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "limit": 1000,
-        "sort": "desc",
-    }
+    is_v3 = "/v3/" in api_url
 
     def _request() -> pd.DataFrame:
+        params = {
+            "date_from": start_date.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "date_to": end_date.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "limit": 1000,
+            "sort": "desc",
+        }
+        if is_v3:
+            locations_url = api_url.replace("/measurements", "/locations", 1)
+            locations_response = requests.get(
+                locations_url,
+                params={"city": city, "limit": 100},
+                headers=headers,
+                timeout=20,
+            )
+            locations_response.raise_for_status()
+            locations = locations_response.json().get("results") or []
+            location_ids = [str(item["id"]) for item in locations if item.get("id") is not None]
+            if not location_ids:
+                return pd.DataFrame()
+            params.update(
+                {
+                    "locations_id": ",".join(location_ids),
+                    "parameters_id": "2",
+                    "datetime_from": params.pop("date_from"),
+                    "datetime_to": params.pop("date_to"),
+                }
+            )
+        else:
+            params.update({"city": city, "parameter": "pm25"})
+
         response = requests.get(api_url, params=params, headers=headers, timeout=20)
         response.raise_for_status()
         payload = response.json()
@@ -220,19 +243,24 @@ def _fetch_openaq_aqi(city: str, start_date: pd.Timestamp, end_date: pd.Timestam
         frame = pd.DataFrame(records)
         if frame.empty:
             return frame
-        timestamp_column = next((col for col in ["date.utc", "date", "datetime", "timestamp"] if col in frame.columns), None)
+        if "date" in frame.columns and frame["date"].map(lambda value: isinstance(value, dict)).any():
+            timestamps = frame["date"].map(lambda value: value.get("utc") if isinstance(value, dict) else value)
+        else:
+            timestamp_column = next((col for col in ["date.utc", "date", "datetime", "timestamp"] if col in frame.columns), None)
+            timestamps = frame[timestamp_column] if timestamp_column else None
         value_column = next((col for col in ["value", "pm25", "measurement"] if col in frame.columns), None)
-        if timestamp_column is None or value_column is None:
+        if timestamps is None or value_column is None:
             return pd.DataFrame()
-        timestamps = pd.to_datetime(frame[timestamp_column], utc=True, errors="coerce")
+        timestamps = pd.to_datetime(timestamps, utc=True, errors="coerce")
         pm25 = pd.to_numeric(frame[value_column], errors="coerce")
+        station_column = next((col for col in ["location", "location_id", "sensor"] if col in frame.columns), None)
         output = pd.DataFrame(
             {
                 "timestamp": timestamps,
                 "city": city,
                 "pm25_ugm3": pm25,
                 "aqi": pm25.apply(lambda value: _pm25_to_aqi(float(value)) if pd.notna(value) else np.nan),
-                "station_id": frame["location"] if "location" in frame.columns else [get_city_config(city)["openaq_location"]] * len(frame),
+                "station_id": frame[station_column] if station_column else [get_city_config(city)["openaq_location"]] * len(frame),
                 "source": SOURCE_NAME_OPENAQ,
             }
         )
