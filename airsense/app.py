@@ -325,13 +325,21 @@ for city, frame in city_frames.items():
     st.sidebar.caption(f"{city}: {source_label} ({source_summary})")
 
 st.subheader("Current AQI and advisories")
+st.caption(f"API configuration: {_api_configuration_status()}")
 card_columns = st.columns(len(selected_cities))
 for column, city in zip(card_columns, selected_cities):
     city_frame = city_frames[city]
     city_latest = _latest_record(city_frame)
     city_category = aqi_to_category(city_latest["aqi"])
+    source_summary = _source_summary(city_frame)
+    source_label = "Live" if "synthetic" not in source_summary else "Synthetic fallback"
     with column:
-        _render_card(city, f"{int(round(city_latest['aqi']))}", f"{city_category} | {get_recommended_action(city_category)}", get_category_color(city_category))
+        _render_card(
+            city,
+            f"{int(round(city_latest['aqi']))}",
+            f"{source_label} ({source_summary}) | {city_category} | {get_recommended_action(city_category)}",
+            get_category_color(city_category),
+        )
 
 st.markdown("### Historical trend")
 st.plotly_chart(_trend_chart(city_frames, primary_city), width="stretch")
