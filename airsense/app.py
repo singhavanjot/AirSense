@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import os
 from pathlib import Path
 import sys
 
@@ -25,6 +26,28 @@ from src.health_advisory import aqi_to_category, get_category_color, get_recomme
 from src.report_export import generate_summary_report
 
 load_dotenv(APP_DIR / ".env")
+
+
+def _load_streamlit_secrets() -> None:
+    """Expose Streamlit Cloud secrets to ingestion code that reads environment variables."""
+    secret_names = (
+        "CPCB_API_URL",
+        "CPCB_API_KEY",
+        "OPENAQ_API_URL",
+        "OPENAQ_API_KEY",
+        "OPENWEATHER_API_URL",
+        "OPENWEATHER_API_KEY",
+    )
+    try:
+        for name in secret_names:
+            if not os.getenv(name) and name in st.secrets:
+                os.environ[name] = str(st.secrets[name])
+    except Exception:
+        # Local runs without Streamlit secrets continue using .env or fallback data.
+        return
+
+
+_load_streamlit_secrets()
 
 st.set_page_config(page_title="AirSense", page_icon="🌫️", layout="wide")
 
