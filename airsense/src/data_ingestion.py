@@ -50,6 +50,19 @@ def _safe_error_message(error: Exception) -> str:
     return message
 
 
+def _find_column(frame: pd.DataFrame, candidates: tuple[str, ...]) -> str | None:
+    """Find a response column while tolerating case, spaces, and punctuation differences."""
+    normalized = {
+        "".join(character for character in str(column).lower() if character.isalnum()): column
+        for column in frame.columns
+    }
+    for candidate in candidates:
+        key = "".join(character for character in candidate.lower() if character.isalnum())
+        if key in normalized:
+            return normalized[key]
+    return None
+
+
 def _slugify(value: str) -> str:
     return "".join(char.lower() if char.isalnum() else "_" for char in value).strip("_")
 
@@ -197,8 +210,11 @@ def _fetch_cpcb_aqi(city: str, start_date: pd.Timestamp, end_date: pd.Timestamp)
         frame = pd.DataFrame(records)
         if frame.empty:
             return frame
-        timestamp_column = next((col for col in ["timestamp", "date", "datetime", "recorded_at"] if col in frame.columns), None)
-        aqi_column = next((col for col in ["aqi", "value", "aqi_value", "pollution_index"] if col in frame.columns), None)
+        timestamp_column = _find_column(frame, ("timestamp", "date", "datetime", "recorded_at", "last_update"))
+        aqi_column = _find_column(
+            frame,
+            ("aqi", "air_quality_index", "aqi_value", "aqi_value_numeric", "avg_aqi", "pollution_index", "value"),
+        )
         if timestamp_column is None or aqi_column is None:
             return pd.DataFrame()
         output = pd.DataFrame(

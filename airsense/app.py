@@ -137,6 +137,13 @@ def _source_summary(frame: pd.DataFrame) -> str:
     return ", ".join(sources) if sources else "unknown"
 
 
+def _api_configuration_status() -> str:
+    """Return a safe summary of whether Streamlit API settings are loaded."""
+    names = ("CPCB_API_KEY", "OPENAQ_API_KEY", "OPENWEATHER_API_KEY")
+    configured = sum(bool(os.getenv(name, "").strip()) for name in names)
+    return f"{configured}/{len(names)} API keys loaded"
+
+
 def _render_card(title: str, value: str, subtitle: str, color: str) -> None:
     """Render a styled metric card in the dashboard."""
     st.markdown(
@@ -310,6 +317,7 @@ latest_action = get_recommended_action(latest_category)
 last_updated = pd.to_datetime(primary_frame["timestamp"].max(), utc=True).strftime("%Y-%m-%d %H:%M UTC")
 
 st.sidebar.markdown(f"**Batch refresh:** data is refreshed periodically, not live.\n\n**Last updated:** {last_updated}")
+st.sidebar.caption(_api_configuration_status())
 st.sidebar.markdown("**Data sources**")
 for city, frame in city_frames.items():
     source_summary = _source_summary(frame)
