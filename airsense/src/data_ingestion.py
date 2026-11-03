@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 import requests
 
-from config import (
+from airsense_config import (
     CPCB_API_KEY_ENV,
     CPCB_API_URL_ENV,
     DEFAULT_CPCB_API_URL,

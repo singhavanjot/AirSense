@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
-from config import MODELS_DIR
+from airsense_config import MODELS_DIR
 
 try:  # pragma: no cover - optional dependency fallback
     from prophet import Prophet

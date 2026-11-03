@@ -1,7 +1,7 @@
 """AQI health advisory mapping for AirSense."""
 from __future__ import annotations
 
-from config import AQI_THRESHOLDS, CATEGORY_COLORS, HEALTH_ACTIONS
+from airsense_config import AQI_THRESHOLDS, CATEGORY_COLORS, HEALTH_ACTIONS
 
 
 def aqi_to_category(aqi_value: float | int | None) -> str:

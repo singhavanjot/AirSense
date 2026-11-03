@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from config import PEAK_HOUR_WINDOWS, PROCESSED_DATA_DIR
+from airsense_config import PEAK_HOUR_WINDOWS, PROCESSED_DATA_DIR
 
 
 def _ensure_timestamp_series(series: pd.Series) -> pd.Series:

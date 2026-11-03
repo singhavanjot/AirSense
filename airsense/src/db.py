@@ -8,7 +8,7 @@ from typing import Any
 
 import pandas as pd
 
-from config import DATABASE_PATH
+from airsense_config import DATABASE_PATH
 
 
 def _resolve_path(db_path: str | Path | None = None) -> Path:

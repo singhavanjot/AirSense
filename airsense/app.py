@@ -16,7 +16,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from dotenv import load_dotenv
 
-from config import DEFAULT_FORECAST_HOURS, DEFAULT_HISTORY_DAYS, MAX_FORECAST_HOURS, MIN_FORECAST_HOURS, PEAK_HOUR_WINDOWS, CITIES
+from airsense_config import DEFAULT_FORECAST_HOURS, DEFAULT_HISTORY_DAYS, MAX_FORECAST_HOURS, MIN_FORECAST_HOURS, CITIES
 from src.alerts import flag_severe_hours, summarize_alerts
 from src.correlation_analysis import compute_peak_offpeak_stats, partial_correlation_controlling_weather
 from src.data_cleaning import clean_aqi_data, merge_aqi_weather, save_cleaned_output, tag_peak_hours
