@@ -17,13 +17,13 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from airsense_config import DEFAULT_FORECAST_HOURS, DEFAULT_HISTORY_DAYS, MAX_FORECAST_HOURS, MIN_FORECAST_HOURS, CITIES
-from src.alerts import flag_severe_hours, summarize_alerts
-from src.correlation_analysis import compute_peak_offpeak_stats, partial_correlation_controlling_weather
-from src.data_cleaning import clean_aqi_data, merge_aqi_weather, save_cleaned_output, tag_peak_hours
-from src.data_ingestion import fetch_aqi_data, fetch_weather_data
-from src.forecasting import load_or_train_model, predict_next_hours
-from src.health_advisory import aqi_to_category, get_category_color, get_recommended_action
-from src.report_export import generate_summary_report
+from airsense_src.alerts import flag_severe_hours, summarize_alerts
+from airsense_src.correlation_analysis import compute_peak_offpeak_stats, partial_correlation_controlling_weather
+from airsense_src.data_cleaning import clean_aqi_data, merge_aqi_weather, save_cleaned_output, tag_peak_hours
+from airsense_src.data_ingestion import fetch_aqi_data, fetch_weather_data
+from airsense_src.forecasting import load_or_train_model, predict_next_hours
+from airsense_src.health_advisory import aqi_to_category, get_category_color, get_recommended_action
+from airsense_src.report_export import generate_summary_report
 
 load_dotenv(APP_DIR / ".env")
 

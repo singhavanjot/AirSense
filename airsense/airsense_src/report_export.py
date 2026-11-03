@@ -6,7 +6,7 @@ from typing import Any
 
 import pandas as pd
 
-from src.health_advisory import aqi_to_category, get_recommended_action
+from airsense_src.health_advisory import aqi_to_category, get_recommended_action
 
 
 def _format_forecast_preview(forecast: pd.DataFrame) -> str:

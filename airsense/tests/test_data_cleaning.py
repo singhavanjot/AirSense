@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from src.data_cleaning import clean_aqi_data, tag_peak_hours
+from airsense_src.data_cleaning import clean_aqi_data, tag_peak_hours
 
 
 def test_clean_aqi_data_removes_invalid_values_and_fills_missing() -> None:

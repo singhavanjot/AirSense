@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from src.correlation_analysis import compute_peak_offpeak_stats, partial_correlation_controlling_weather
+from airsense_src.correlation_analysis import compute_peak_offpeak_stats, partial_correlation_controlling_weather
 
 
 def _sample_frame(all_peak: bool = False) -> pd.DataFrame:

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from src.health_advisory import aqi_to_category
+from airsense_src.health_advisory import aqi_to_category
 
 SEVERE_CATEGORIES = {"Poor", "Very Poor", "Severe"}
 

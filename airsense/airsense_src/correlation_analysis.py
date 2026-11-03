@@ -9,7 +9,7 @@ import pandas as pd
 from scipy import stats
 from sklearn.linear_model import LinearRegression
 
-from src.data_cleaning import tag_peak_hours
+from airsense_src.data_cleaning import tag_peak_hours
 
 
 def _prepare_frame(df: pd.DataFrame) -> pd.DataFrame:
