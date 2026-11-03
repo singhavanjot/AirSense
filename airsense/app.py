@@ -331,13 +331,11 @@ for column, city in zip(card_columns, selected_cities):
     city_frame = city_frames[city]
     city_latest = _latest_record(city_frame)
     city_category = aqi_to_category(city_latest["aqi"])
-    source_summary = _source_summary(city_frame)
-    source_label = "Live" if "synthetic" not in source_summary else "Synthetic fallback"
     with column:
         _render_card(
             city,
             f"{int(round(city_latest['aqi']))}",
-            f"{source_label} ({source_summary}) | {city_category} | {get_recommended_action(city_category)}",
+            f"{city_category} | {get_recommended_action(city_category)}",
             get_category_color(city_category),
         )
 
