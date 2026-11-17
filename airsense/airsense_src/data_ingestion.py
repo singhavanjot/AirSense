@@ -20,21 +20,50 @@ from airsense_config import (
     DEFAULT_CPCB_API_URL,
     DEFAULT_OPENAQ_API_URL,
     DEFAULT_OPENWEATHER_API_URL,
+    DEFAULT_OPEN_METEO_API_URL,
     OPENAQ_API_KEY_ENV,
     OPENAQ_API_URL_ENV,
     OPENWEATHER_API_KEY_ENV,
     OPENWEATHER_API_URL_ENV,
+    OPEN_METEO_API_URL_ENV,
     RAW_DATA_DIR,
     RANDOM_SEED,
     SOURCE_NAME_CPCB,
     SOURCE_NAME_OPENAQ,
     SOURCE_NAME_OPENWEATHER,
+    SOURCE_NAME_OPEN_METEO,
     SOURCE_NAME_SYNTHETIC,
     get_city_config,
 )
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Diagnostic log – collects human-readable notes about each API attempt
+# so the dashboard can display them.  Reset per session.
+# ---------------------------------------------------------------------------
+_api_diagnostics: list[str] = []
+
+
+def get_api_diagnostics() -> list[str]:
+    """Return accumulated diagnostic messages for the current session."""
+    return list(_api_diagnostics)
+
+
+def clear_api_diagnostics() -> None:
+    """Reset diagnostic messages (called at the start of each dashboard load)."""
+    _api_diagnostics.clear()
+
+
+def _diag(message: str) -> None:
+    """Append a diagnostic line *and* emit it via the logger."""
+    _api_diagnostics.append(message)
+    logger.info(message)
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
 
 def _safe_error_message(error: Exception) -> str:
     """Return an exception message with common API credential query values hidden."""
@@ -102,16 +131,20 @@ def _retry_call(factory: Callable[[], pd.DataFrame], attempts: int = 3, base_del
             response = getattr(exc, "response", None)
             status_code = getattr(response, "status_code", None)
             if status_code in {401, 403}:
-                logger.error("API authentication failed with HTTP %s", status_code)
+                _diag(f"  ✗ HTTP {status_code} – authentication failed")
                 return pd.DataFrame()
             wait_time = base_delay * (2**attempt)
             logger.warning("Attempt %s failed: %s", attempt + 1, _safe_error_message(exc))
             if attempt < attempts - 1:
                 time.sleep(wait_time)
     if last_error is not None:
-        logger.error("All retries failed: %s", _safe_error_message(last_error))
+        _diag(f"  ✗ All retries failed: {_safe_error_message(last_error)}")
     return pd.DataFrame()
 
+
+# ---------------------------------------------------------------------------
+# Synthetic data generation
+# ---------------------------------------------------------------------------
 
 def _seed_for(city: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> int:
     payload = f"{city}|{start_date.isoformat()}|{end_date.isoformat()}|{RANDOM_SEED}".encode("utf-8")
@@ -188,18 +221,25 @@ def generate_synthetic_data(city: str, start_date: str | datetime, end_date: str
     )
 
 
+# ---------------------------------------------------------------------------
+# CPCB (data.gov.in) AQI ingestion – uses filters[] syntax
+# ---------------------------------------------------------------------------
+
 def _fetch_cpcb_aqi(city: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
     api_url = os.getenv(CPCB_API_URL_ENV, DEFAULT_CPCB_API_URL)
     api_key = os.getenv(CPCB_API_KEY_ENV, "").strip()
     if not api_key or "placeholder" in api_url:
+        _diag("CPCB: skipped – no API key or placeholder URL")
         return pd.DataFrame()
 
-    params = {
+    _diag(f"CPCB: fetching for {city}…")
+    # data.gov.in uses filters[column]=value syntax
+    params: dict[str, Any] = {
         "api-key": api_key,
         "format": "json",
-        "city": city,
-        "start_date": start_date.strftime("%Y-%m-%d"),
-        "end_date": end_date.strftime("%Y-%m-%d"),
+        "limit": 1000,
+        "offset": 0,
+        "filters[city]": city,
     }
 
     def _request() -> pd.DataFrame:
@@ -209,13 +249,15 @@ def _fetch_cpcb_aqi(city: str, start_date: pd.Timestamp, end_date: pd.Timestamp)
         records = payload.get("records") or payload.get("data") or payload.get("results") or []
         frame = pd.DataFrame(records)
         if frame.empty:
+            _diag("  ✗ CPCB returned empty records")
             return frame
         timestamp_column = _find_column(frame, ("timestamp", "date", "datetime", "recorded_at", "last_update"))
         aqi_column = _find_column(
             frame,
-            ("aqi", "air_quality_index", "aqi_value", "aqi_value_numeric", "avg_aqi", "pollution_index", "value"),
+            ("aqi", "air_quality_index", "aqi_value", "aqi_value_numeric", "avg_aqi", "pollution_index", "value", "pollutant_avg"),
         )
         if timestamp_column is None or aqi_column is None:
+            _diag(f"  ✗ CPCB columns not found (got: {list(frame.columns)[:10]})")
             return pd.DataFrame()
         output = pd.DataFrame(
             {
@@ -226,91 +268,138 @@ def _fetch_cpcb_aqi(city: str, start_date: pd.Timestamp, end_date: pd.Timestamp)
                 "source": SOURCE_NAME_CPCB,
             }
         )
-        return output.dropna(subset=["timestamp", "aqi"])
+        result = output.dropna(subset=["timestamp", "aqi"])
+        _diag(f"  ✓ CPCB returned {len(result)} records")
+        return result
 
     return _retry_call(_request)
 
+
+# ---------------------------------------------------------------------------
+# OpenAQ v3 AQI ingestion – coordinate-based sensor lookup
+# ---------------------------------------------------------------------------
 
 def _fetch_openaq_aqi(city: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
-    api_url = os.getenv(OPENAQ_API_URL_ENV, DEFAULT_OPENAQ_API_URL)
+    api_base = os.getenv(OPENAQ_API_URL_ENV, DEFAULT_OPENAQ_API_URL).rstrip("/")
     api_key = os.getenv(OPENAQ_API_KEY_ENV, "").strip()
-    headers = {"accept": "application/json"}
-    if api_key:
-        headers["X-API-Key"] = api_key
 
-    is_v3 = "/v3/" in api_url
+    # OpenAQ v3 requires an API key – skip if missing
+    if not api_key:
+        _diag("OpenAQ: skipped – no API key set")
+        return pd.DataFrame()
+
+    headers = {"accept": "application/json", "X-API-Key": api_key}
+    city_cfg = get_city_config(city)
+    _diag(f"OpenAQ v3: fetching for {city}…")
 
     def _request() -> pd.DataFrame:
-        params = {
-            "date_from": start_date.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "date_to": end_date.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "limit": 1000,
-            "sort": "desc",
+        # Step 1: Find locations near the city coordinates
+        locations_url = f"{api_base}/locations"
+        loc_params = {
+            "coordinates": f"{city_cfg['lat']},{city_cfg['lon']}",
+            "radius": 25000,
+            "limit": 10,
         }
-        if is_v3:
-            locations_url = api_url.replace("/measurements", "/locations", 1)
-            locations_response = requests.get(
-                locations_url,
-                params={"city": city, "limit": 100},
-                headers=headers,
-                timeout=20,
-            )
-            locations_response.raise_for_status()
-            locations = locations_response.json().get("results") or []
-            location_ids = [str(item["id"]) for item in locations if item.get("id") is not None]
-            if not location_ids:
-                return pd.DataFrame()
-            params.update(
-                {
-                    "locations_id": ",".join(location_ids),
-                    "parameters_id": "2",
-                    "datetime_from": params.pop("date_from"),
-                    "datetime_to": params.pop("date_to"),
-                }
-            )
-        else:
-            params.update({"city": city, "parameter": "pm25"})
-
-        response = requests.get(api_url, params=params, headers=headers, timeout=20)
-        response.raise_for_status()
-        payload = response.json()
-        records = payload.get("results") or payload.get("data") or []
-        frame = pd.DataFrame(records)
-        if frame.empty:
-            return frame
-        if "date" in frame.columns and frame["date"].map(lambda value: isinstance(value, dict)).any():
-            timestamps = frame["date"].map(lambda value: value.get("utc") if isinstance(value, dict) else value)
-        else:
-            timestamp_column = next((col for col in ["date.utc", "date", "datetime", "timestamp"] if col in frame.columns), None)
-            timestamps = frame[timestamp_column] if timestamp_column else None
-        value_column = next((col for col in ["value", "pm25", "measurement"] if col in frame.columns), None)
-        if timestamps is None or value_column is None:
+        loc_response = requests.get(locations_url, params=loc_params, headers=headers, timeout=20)
+        loc_response.raise_for_status()
+        locations = loc_response.json().get("results") or []
+        if not locations:
+            _diag(f"  ✗ OpenAQ found no locations near {city}")
             return pd.DataFrame()
-        timestamps = pd.to_datetime(timestamps, utc=True, errors="coerce")
-        pm25 = pd.to_numeric(frame[value_column], errors="coerce")
-        station_column = next((col for col in ["location", "location_id", "sensor"] if col in frame.columns), None)
-        output = pd.DataFrame(
-            {
-                "timestamp": timestamps,
-                "city": city,
-                "pm25_ugm3": pm25,
-                "aqi": pm25.apply(lambda value: _pm25_to_aqi(float(value)) if pd.notna(value) else np.nan),
-                "station_id": frame[station_column] if station_column else [get_city_config(city)["openaq_location"]] * len(frame),
-                "source": SOURCE_NAME_OPENAQ,
-            }
-        )
-        return output.dropna(subset=["timestamp", "aqi"])
+
+        _diag(f"  → Found {len(locations)} location(s)")
+
+        # Step 2: Collect sensor IDs for PM2.5 (parameters_id=2) from each location
+        all_rows: list[pd.DataFrame] = []
+        for loc in locations[:3]:  # limit to 3 locations to avoid rate limits
+            location_id = loc.get("id")
+            if location_id is None:
+                continue
+
+            # Get sensors for this location
+            sensors_url = f"{api_base}/locations/{location_id}/sensors"
+            sensors_response = requests.get(sensors_url, headers=headers, timeout=20)
+            if sensors_response.status_code != 200:
+                continue
+            sensors = sensors_response.json().get("results") or []
+
+            for sensor in sensors:
+                sensor_id = sensor.get("id")
+                param = sensor.get("parameter") or {}
+                param_id = param.get("id") if isinstance(param, dict) else None
+                # PM2.5 has parameters_id = 2 in OpenAQ
+                if param_id != 2 and str(param_id) != "2":
+                    continue
+
+                # Step 3: Get hourly measurements from this sensor
+                measurements_url = f"{api_base}/sensors/{sensor_id}/hours"
+                meas_params = {
+                    "datetime_from": start_date.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "datetime_to": end_date.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "limit": 1000,
+                }
+                meas_response = requests.get(measurements_url, params=meas_params, headers=headers, timeout=20)
+                if meas_response.status_code != 200:
+                    continue
+                records = meas_response.json().get("results") or []
+                if not records:
+                    continue
+
+                frame = pd.DataFrame(records)
+                # OpenAQ v3 hourly response has 'datetime' (dict with 'utc') and 'value'
+                if "datetime" in frame.columns:
+                    timestamps = frame["datetime"].apply(
+                        lambda d: d.get("utc") if isinstance(d, dict) else d
+                    )
+                elif "period" in frame.columns:
+                    timestamps = frame["period"].apply(
+                        lambda d: d.get("datetimeFrom", {}).get("utc") if isinstance(d, dict) else d
+                    )
+                else:
+                    ts_col = next((c for c in ["date", "timestamp"] if c in frame.columns), None)
+                    if ts_col is None:
+                        continue
+                    timestamps = frame[ts_col]
+
+                value_col = next((c for c in ["value", "average", "avg"] if c in frame.columns), None)
+                if value_col is None:
+                    continue
+
+                pm25 = pd.to_numeric(frame[value_col], errors="coerce")
+                sensor_df = pd.DataFrame({
+                    "timestamp": pd.to_datetime(timestamps, utc=True, errors="coerce"),
+                    "city": city,
+                    "pm25_ugm3": pm25,
+                    "aqi": pm25.apply(lambda v: _pm25_to_aqi(float(v)) if pd.notna(v) else np.nan),
+                    "station_id": str(location_id),
+                    "source": SOURCE_NAME_OPENAQ,
+                })
+                all_rows.append(sensor_df.dropna(subset=["timestamp", "aqi"]))
+
+        if not all_rows:
+            _diag("  ✗ OpenAQ returned no PM2.5 measurements")
+            return pd.DataFrame()
+
+        combined = pd.concat(all_rows, ignore_index=True).drop_duplicates(subset=["timestamp", "city"])
+        _diag(f"  ✓ OpenAQ returned {len(combined)} records")
+        return combined
 
     return _retry_call(_request)
 
+
+# ---------------------------------------------------------------------------
+# OpenWeatherMap weather ingestion
+# ---------------------------------------------------------------------------
 
 def _fetch_openweather_weather(city: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
     city_config = get_city_config(city)
     api_url = os.getenv(OPENWEATHER_API_URL_ENV, DEFAULT_OPENWEATHER_API_URL)
     api_key = os.getenv(OPENWEATHER_API_KEY_ENV, "").strip()
     if not api_key:
+        _diag("OpenWeather: skipped – no API key set")
         return pd.DataFrame()
 
+    _diag(f"OpenWeather: fetching for {city}…")
     start_day = start_date.floor("D")
     end_day = end_date.ceil("D")
     days = pd.date_range(start_day, end_day, freq="D", tz="UTC")
@@ -331,6 +420,7 @@ def _fetch_openweather_weather(city: str, start_date: pd.Timestamp, end_date: pd
             response = requests.get(api_url, params=params, timeout=20)
             if response.status_code in {401, 403}:
                 authorization_failed = True
+                _diag(f"  ✗ OpenWeather HTTP {response.status_code}")
                 return pd.DataFrame()
             response.raise_for_status()
             payload = response.json()
@@ -345,6 +435,14 @@ def _fetch_openweather_weather(city: str, start_date: pd.Timestamp, end_date: pd
             humidity_column = next((col for col in ["humidity", "humidity_pct"] if col in frame.columns), None)
             wind_column = next((col for col in ["wind_speed", "wind"] if col in frame.columns), None)
             rain_column = next((col for col in ["rain", "precipitation"] if col in frame.columns), None)
+
+            # Handle rain field – OpenWeather returns {"1h": value} dicts
+            rain_values: Any = 0.0
+            if rain_column and rain_column in frame.columns:
+                rain_values = frame[rain_column].apply(
+                    lambda v: v.get("1h", 0.0) if isinstance(v, dict) else (float(v) if pd.notna(v) else 0.0)
+                )
+
             output = pd.DataFrame(
                 {
                     "timestamp": pd.to_datetime(frame[timestamp_column], unit="s", utc=True, errors="coerce")
@@ -354,7 +452,7 @@ def _fetch_openweather_weather(city: str, start_date: pd.Timestamp, end_date: pd
                     "temperature_c": pd.to_numeric(frame[temp_column], errors="coerce") if temp_column else np.nan,
                     "humidity_pct": pd.to_numeric(frame[humidity_column], errors="coerce") if humidity_column else np.nan,
                     "wind_speed_mps": pd.to_numeric(frame[wind_column], errors="coerce") if wind_column else np.nan,
-                    "precipitation_mm": pd.to_numeric(frame[rain_column], errors="coerce") if rain_column else 0.0,
+                    "precipitation_mm": rain_values,
                     "source": SOURCE_NAME_OPENWEATHER,
                 }
             )
@@ -362,15 +460,75 @@ def _fetch_openweather_weather(city: str, start_date: pd.Timestamp, end_date: pd
 
         day_frame = _retry_call(_request_day)
         if authorization_failed:
-            logger.error("OpenWeather authentication failed; using synthetic weather fallback.")
             break
         if not day_frame.empty:
             rows.append(day_frame)
 
     if not rows:
         return pd.DataFrame()
-    return pd.concat(rows, ignore_index=True).drop_duplicates(subset=["timestamp", "city"])
+    result = pd.concat(rows, ignore_index=True).drop_duplicates(subset=["timestamp", "city"])
+    _diag(f"  ✓ OpenWeather returned {len(result)} records")
+    return result
 
+
+# ---------------------------------------------------------------------------
+# Open-Meteo FREE weather fallback – no API key required, hourly resolution
+# ---------------------------------------------------------------------------
+
+def _fetch_open_meteo_weather(city: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
+    """Fetch hourly weather from Open-Meteo (free, no API key)."""
+    city_config = get_city_config(city)
+    api_url = os.getenv(OPEN_METEO_API_URL_ENV, DEFAULT_OPEN_METEO_API_URL)
+
+    _diag(f"Open-Meteo: fetching for {city}…")
+
+    # Clamp end_date to yesterday (Open-Meteo archive has ~5-day lag for ERA5)
+    today = pd.Timestamp.now(tz="UTC").floor("D")
+    effective_end = min(end_date.floor("D"), today - pd.Timedelta(days=1))
+    effective_start = start_date.floor("D")
+    if effective_end < effective_start:
+        # If the entire range is too recent, shift start back to get *some* data
+        effective_end = today - pd.Timedelta(days=1)
+        effective_start = effective_end - pd.Timedelta(days=max(7, (end_date - start_date).days))
+
+    params = {
+        "latitude": city_config["lat"],
+        "longitude": city_config["lon"],
+        "start_date": effective_start.strftime("%Y-%m-%d"),
+        "end_date": effective_end.strftime("%Y-%m-%d"),
+        "hourly": "temperature_2m,relative_humidity_2m,wind_speed_10m,precipitation",
+        "wind_speed_unit": "ms",
+        "timezone": "UTC",
+    }
+
+    def _request() -> pd.DataFrame:
+        response = requests.get(api_url, params=params, timeout=30)
+        response.raise_for_status()
+        payload = response.json()
+        hourly = payload.get("hourly")
+        if not hourly or "time" not in hourly:
+            _diag("  ✗ Open-Meteo returned no hourly data")
+            return pd.DataFrame()
+
+        output = pd.DataFrame({
+            "timestamp": pd.to_datetime(hourly["time"], utc=True, errors="coerce"),
+            "city": city,
+            "temperature_c": pd.to_numeric(pd.Series(hourly.get("temperature_2m")), errors="coerce"),
+            "humidity_pct": pd.to_numeric(pd.Series(hourly.get("relative_humidity_2m")), errors="coerce"),
+            "wind_speed_mps": pd.to_numeric(pd.Series(hourly.get("wind_speed_10m")), errors="coerce"),
+            "precipitation_mm": pd.to_numeric(pd.Series(hourly.get("precipitation")), errors="coerce").fillna(0.0),
+            "source": SOURCE_NAME_OPEN_METEO,
+        })
+        result = output.dropna(subset=["timestamp"])
+        _diag(f"  ✓ Open-Meteo returned {len(result)} records")
+        return result
+
+    return _retry_call(_request)
+
+
+# ---------------------------------------------------------------------------
+# Synthetic fallbacks
+# ---------------------------------------------------------------------------
 
 def _synthetic_aqi_frame(city: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
     synthetic = generate_synthetic_data(city, start_date, end_date)
@@ -382,6 +540,10 @@ def _synthetic_weather_frame(city: str, start_date: pd.Timestamp, end_date: pd.T
     return synthetic[["timestamp", "city", "temperature_c", "humidity_pct", "wind_speed_mps", "precipitation_mm", "source"]].copy()
 
 
+# ---------------------------------------------------------------------------
+# Public API – fetch_aqi_data / fetch_weather_data
+# ---------------------------------------------------------------------------
+
 def fetch_aqi_data(city: str, start_date: str | datetime, end_date: str | datetime) -> pd.DataFrame:
     """Fetch AQI data for a city, falling back to OpenAQ or synthetic data."""
     start_ts = _coerce_datetime(start_date)
@@ -391,6 +553,7 @@ def fetch_aqi_data(city: str, start_date: str | datetime, end_date: str | dateti
     if data.empty:
         data = _retry_call(lambda: _fetch_openaq_aqi(city, start_ts, end_ts))
     if data.empty:
+        _diag(f"AQI [{city}]: all APIs failed → synthetic fallback")
         data = _synthetic_aqi_frame(city, start_ts, end_ts)
     source_name = data["source"].iloc[0] if not data.empty and "source" in data.columns else SOURCE_NAME_SYNTHETIC
     _save_raw_pull(data, city, source_name, start_ts, end_ts)
@@ -398,13 +561,22 @@ def fetch_aqi_data(city: str, start_date: str | datetime, end_date: str | dateti
 
 
 def fetch_weather_data(city: str, start_date: str | datetime, end_date: str | datetime) -> pd.DataFrame:
-    """Fetch weather data for a city, falling back to synthetic data when needed."""
+    """Fetch weather data for a city, falling back through Open-Meteo and synthetic data."""
     start_ts = _coerce_datetime(start_date)
     end_ts = _coerce_datetime(end_date)
 
+    # Try OpenWeather first (requires paid API key)
     data = _retry_call(lambda: _fetch_openweather_weather(city, start_ts, end_ts))
+
+    # Fallback to Open-Meteo (free, no API key needed)
     if data.empty:
+        data = _retry_call(lambda: _fetch_open_meteo_weather(city, start_ts, end_ts))
+
+    # Last resort: synthetic
+    if data.empty:
+        _diag(f"Weather [{city}]: all APIs failed → synthetic fallback")
         data = _synthetic_weather_frame(city, start_ts, end_ts)
+
     source_name = data["source"].iloc[0] if not data.empty and "source" in data.columns else SOURCE_NAME_SYNTHETIC
     _save_raw_pull(data, city, source_name, start_ts, end_ts)
     return data.sort_values("timestamp").reset_index(drop=True)

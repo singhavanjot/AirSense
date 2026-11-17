@@ -80,14 +80,17 @@ OPENAQ_API_URL_ENV = "OPENAQ_API_URL"
 OPENAQ_API_KEY_ENV = "OPENAQ_API_KEY"
 OPENWEATHER_API_URL_ENV = "OPENWEATHER_API_URL"
 OPENWEATHER_API_KEY_ENV = "OPENWEATHER_API_KEY"
+OPEN_METEO_API_URL_ENV = "OPEN_METEO_API_URL"
 
 DEFAULT_CPCB_API_URL = "https://api.data.gov.in/resource/placeholder-cpcb-aqi"
-DEFAULT_OPENAQ_API_URL = "https://api.openaq.org/v3/measurements"
+DEFAULT_OPENAQ_API_URL = "https://api.openaq.org/v3"
 DEFAULT_OPENWEATHER_API_URL = "https://api.openweathermap.org/data/3.0/onecall/timemachine"
+DEFAULT_OPEN_METEO_API_URL = "https://archive-api.open-meteo.com/v1/archive"
 
 SOURCE_NAME_CPCB = "cpcb"
 SOURCE_NAME_OPENAQ = "openaq"
 SOURCE_NAME_OPENWEATHER = "openweather"
+SOURCE_NAME_OPEN_METEO = "open_meteo"
 SOURCE_NAME_SYNTHETIC = "synthetic"
 
 TIMEZONE = "Asia/Kolkata"

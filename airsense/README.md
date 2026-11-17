@@ -52,14 +52,14 @@ flowchart LR
 ```text
 airsense/
 ├── app.py
-├── config.py
+├── airsense_config.py
 ├── requirements.txt
 ├── .env.example
 ├── .gitignore
 ├── README.md
-├── src/
+├── sitecustomize.py
+├── airsense_src/
 ├── data/
 ├── tests/
-├── notebooks/
-└── .venv/
+└── notebooks/
 ```

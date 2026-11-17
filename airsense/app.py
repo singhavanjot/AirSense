@@ -20,7 +20,7 @@ from airsense_config import DEFAULT_FORECAST_HOURS, DEFAULT_HISTORY_DAYS, MAX_FO
 from airsense_src.alerts import flag_severe_hours, summarize_alerts
 from airsense_src.correlation_analysis import compute_peak_offpeak_stats, partial_correlation_controlling_weather
 from airsense_src.data_cleaning import clean_aqi_data, merge_aqi_weather, save_cleaned_output, tag_peak_hours
-from airsense_src.data_ingestion import fetch_aqi_data, fetch_weather_data
+from airsense_src.data_ingestion import fetch_aqi_data, fetch_weather_data, get_api_diagnostics, clear_api_diagnostics
 from airsense_src.forecasting import load_or_train_model, predict_next_hours
 from airsense_src.health_advisory import aqi_to_category, get_category_color, get_recommended_action
 from airsense_src.report_export import generate_summary_report
@@ -305,6 +305,7 @@ forecast_hours = st.sidebar.slider("Forecast horizon (hours)", MIN_FORECAST_HOUR
 history_days = st.sidebar.slider("Historical window (days)", 7, 90, DEFAULT_HISTORY_DAYS, step=7)
 
 batch_marker = _batch_marker()
+clear_api_diagnostics()
 city_frames: dict[str, pd.DataFrame] = {}
 for city in selected_cities:
     city_frames[city] = load_city_dataset(city, batch_marker, history_days)
@@ -323,6 +324,13 @@ for city, frame in city_frames.items():
     source_summary = _source_summary(frame)
     source_label = "Live" if "synthetic" not in source_summary else "Synthetic fallback"
     st.sidebar.caption(f"{city}: {source_label} ({source_summary})")
+
+# API diagnostics expander
+diagnostics = get_api_diagnostics()
+if diagnostics:
+    with st.sidebar.expander("🔍 API diagnostics", expanded=False):
+        for line in diagnostics:
+            st.text(line)
 
 st.subheader("Current AQI and advisories")
 st.caption(f"API configuration: {_api_configuration_status()}")
