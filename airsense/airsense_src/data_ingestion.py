@@ -228,11 +228,11 @@ def generate_synthetic_data(city: str, start_date: str | datetime, end_date: str
 def _fetch_cpcb_aqi(city: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
     api_url = os.getenv(CPCB_API_URL_ENV, DEFAULT_CPCB_API_URL)
     api_key = os.getenv(CPCB_API_KEY_ENV, "").strip()
-    if not api_key or "placeholder" in api_url:
-        _diag("CPCB: skipped – no API key or placeholder URL")
+    if not api_key:
+        _diag("CPCB: skipped – no API key set (register at data.gov.in)")
         return pd.DataFrame()
 
-    _diag(f"CPCB: fetching for {city}…")
+    _diag(f"CPCB: fetching for {city} from data.gov.in…")
     # data.gov.in uses filters[column]=value syntax
     params: dict[str, Any] = {
         "api-key": api_key,
@@ -243,14 +243,34 @@ def _fetch_cpcb_aqi(city: str, start_date: pd.Timestamp, end_date: pd.Timestamp)
     }
 
     def _request() -> pd.DataFrame:
-        response = requests.get(api_url, params=params, timeout=20)
+        response = requests.get(api_url, params=params, timeout=25)
         response.raise_for_status()
         payload = response.json()
         records = payload.get("records") or payload.get("data") or payload.get("results") or []
         frame = pd.DataFrame(records)
+
+        # If empty with exact city, try title case or uppercase variants
         if frame.empty:
-            _diag("  ✗ CPCB returned empty records")
+            for variant in [city.title(), city.upper()]:
+                params["filters[city]"] = variant
+                r2 = requests.get(api_url, params=params, timeout=25)
+                if r2.status_code == 200:
+                    rec2 = r2.json().get("records") or []
+                    if rec2:
+                        frame = pd.DataFrame(rec2)
+                        break
+
+        if frame.empty:
+            _diag(f"  ✗ CPCB returned 0 records for {city}")
             return frame
+
+        # CPCB returns rows per pollutant (PM2.5, PM10, NO2, etc.)
+        # Prioritize PM2.5 if available
+        if "pollutant_id" in frame.columns:
+            pm25_mask = frame["pollutant_id"].astype(str).str.upper().str.contains("PM2.5|PM25|PM2_5")
+            if pm25_mask.any():
+                frame = frame[pm25_mask]
+
         timestamp_column = _find_column(frame, ("timestamp", "date", "datetime", "recorded_at", "last_update"))
         aqi_column = _find_column(
             frame,
@@ -259,17 +279,31 @@ def _fetch_cpcb_aqi(city: str, start_date: pd.Timestamp, end_date: pd.Timestamp)
         if timestamp_column is None or aqi_column is None:
             _diag(f"  ✗ CPCB columns not found (got: {list(frame.columns)[:10]})")
             return pd.DataFrame()
+
+        raw_ts = frame[timestamp_column]
+        parsed_ts = pd.to_datetime(raw_ts, dayfirst=True, utc=True, errors="coerce")
+        raw_val = pd.to_numeric(frame[aqi_column], errors="coerce")
+
+        if aqi_column == "pollutant_avg":
+            aqi_series = raw_val.apply(lambda v: _pm25_to_aqi(float(v)) if pd.notna(v) else np.nan)
+            pm25_series = raw_val
+        else:
+            aqi_series = raw_val
+            pm25_series = aqi_series.apply(lambda v: max(0.0, (float(v) - 10.0) / 4.0) if pd.notna(v) else np.nan)
+
+        station_col = _find_column(frame, ("station", "station_id", "station_name", "location"))
         output = pd.DataFrame(
             {
-                "timestamp": pd.to_datetime(frame[timestamp_column], utc=True, errors="coerce"),
+                "timestamp": parsed_ts,
                 "city": city,
-                "aqi": pd.to_numeric(frame[aqi_column], errors="coerce"),
-                "station_id": frame["station_id"] if "station_id" in frame.columns else [get_city_config(city)["cpcb_station_id"]] * len(frame),
+                "aqi": aqi_series,
+                "pm25_ugm3": pm25_series,
+                "station_id": frame[station_col] if station_col else [get_city_config(city)["cpcb_station_id"]] * len(frame),
                 "source": SOURCE_NAME_CPCB,
             }
         )
         result = output.dropna(subset=["timestamp", "aqi"])
-        _diag(f"  ✓ CPCB returned {len(result)} records")
+        _diag(f"  ✓ CPCB returned {len(result)} records for {city}")
         return result
 
     return _retry_call(_request)

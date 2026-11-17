@@ -110,7 +110,7 @@ def _batch_marker() -> str:
 
 
 @st.cache_data(show_spinner=False)
-def load_city_dataset(city: str, batch_marker: str, history_days: int) -> pd.DataFrame:
+def load_city_dataset(city: str, batch_marker: str, history_days: int, api_cache_key: str = "") -> pd.DataFrame:
     """Load, clean, merge, and tag one city's AQI and weather data."""
     end_date = pd.Timestamp.now(tz="UTC").floor("h")
     start_date = end_date - pd.Timedelta(days=history_days)
@@ -124,9 +124,9 @@ def load_city_dataset(city: str, batch_marker: str, history_days: int) -> pd.Dat
 
 
 @st.cache_resource(show_spinner=False)
-def load_city_model(city: str, batch_marker: str, history_days: int):
+def load_city_model(city: str, batch_marker: str, history_days: int, api_cache_key: str = ""):
     """Load a cached forecast model for the city or train one if missing."""
-    data = load_city_dataset(city, batch_marker, history_days)
+    data = load_city_dataset(city, batch_marker, history_days, api_cache_key)
     return load_or_train_model(data, city)
 
 
@@ -304,6 +304,32 @@ st.markdown(
 )
 
 st.sidebar.title("City comparison")
+
+# Live API configuration inputs
+with st.sidebar.expander("🔑 Live API Keys (CPCB / OpenAQ)", expanded=False):
+    st.markdown("Enter free API keys to fetch live data:")
+    openaq_input = st.text_input(
+        "OpenAQ API Key",
+        value=os.getenv("OPENAQ_API_KEY", ""),
+        type="password",
+        help="Free key: https://explore.openaq.org/register",
+    )
+    cpcb_input = st.text_input(
+        "CPCB / data.gov.in Key",
+        value=os.getenv("CPCB_API_KEY", ""),
+        type="password",
+        help="Free key: https://data.gov.in/",
+    )
+    if openaq_input.strip():
+        os.environ["OPENAQ_API_KEY"] = openaq_input.strip()
+    if cpcb_input.strip():
+        os.environ["CPCB_API_KEY"] = cpcb_input.strip()
+
+if st.sidebar.button("🔄 Reload & Fetch Live Data"):
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    st.rerun()
+
 selected_cities = st.sidebar.multiselect("Choose cities", list(CITIES.keys()), default=list(CITIES.keys())[:3])
 if not selected_cities:
     st.info("Choose one or more cities to load the dashboard.")
@@ -314,10 +340,11 @@ forecast_hours = st.sidebar.slider("Forecast horizon (hours)", MIN_FORECAST_HOUR
 history_days = st.sidebar.slider("Historical window (days)", 7, 90, DEFAULT_HISTORY_DAYS, step=7)
 
 batch_marker = _batch_marker()
+api_cache_key = f"{os.getenv('CPCB_API_KEY', '').strip()}_{os.getenv('OPENAQ_API_KEY', '').strip()}"
 clear_api_diagnostics()
 city_frames: dict[str, pd.DataFrame] = {}
 for city in selected_cities:
-    city_frames[city] = load_city_dataset(city, batch_marker, history_days)
+    city_frames[city] = load_city_dataset(city, batch_marker, history_days, api_cache_key)
 
 primary_frame = city_frames[primary_city].copy()
 latest_row = _latest_record(primary_frame)
@@ -377,7 +404,7 @@ with right:
 st.write(_analysis_sentence(peak_stats, partial_stats))
 st.caption(f"Weather-controlled interpretation: {partial_stats.get('interpretation', 'Unavailable')}")
 
-model = load_city_model(primary_city, batch_marker, history_days)
+model = load_city_model(primary_city, batch_marker, history_days, api_cache_key)
 forecast = predict_next_hours(model, hours=forecast_hours)
 forecast["timestamp"] = pd.to_datetime(forecast["timestamp"], utc=True)
 st.markdown("### Forecast panel")
