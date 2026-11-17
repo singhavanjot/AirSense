@@ -16,20 +16,23 @@ import plotly.graph_objects as go
 import streamlit as st
 from dotenv import load_dotenv
 
-from airsense_config import DEFAULT_FORECAST_HOURS, DEFAULT_HISTORY_DAYS, MAX_FORECAST_HOURS, MIN_FORECAST_HOURS, CITIES
+from airsense_config import (
+    AQI_THRESHOLDS,
+    CITIES,
+    DEFAULT_FORECAST_HOURS,
+    DEFAULT_HISTORY_DAYS,
+    MAX_FORECAST_HOURS,
+    MIN_FORECAST_HOURS,
+)
 from airsense_src.alerts import flag_severe_hours, summarize_alerts
 from airsense_src.correlation_analysis import compute_peak_offpeak_stats, partial_correlation_controlling_weather
 from airsense_src.data_cleaning import clean_aqi_data, merge_aqi_weather, save_cleaned_output, tag_peak_hours
-import airsense_src.data_ingestion as data_ingestion
-import importlib
-try:
-    importlib.reload(data_ingestion)
-except Exception:
-    pass
-fetch_aqi_data = data_ingestion.fetch_aqi_data
-fetch_weather_data = data_ingestion.fetch_weather_data
-get_api_diagnostics = getattr(data_ingestion, "get_api_diagnostics", lambda: [])
-clear_api_diagnostics = getattr(data_ingestion, "clear_api_diagnostics", lambda: None)
+from airsense_src.data_ingestion import (
+    clear_api_diagnostics,
+    fetch_aqi_data,
+    fetch_weather_data,
+    get_api_diagnostics,
+)
 from airsense_src.forecasting import load_or_train_model, predict_next_hours
 from airsense_src.health_advisory import aqi_to_category, get_category_color, get_recommended_action
 from airsense_src.report_export import generate_summary_report
